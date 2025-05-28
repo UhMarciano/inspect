@@ -145,15 +145,29 @@ if (CONFIG.rate_limit && CONFIG.rate_limit.enable) {
     }))
 }
 
-app.get('/inspect', function(req, res) {
+app.post('/inspect', function(req, res) {
+    // Validate API key
+    if (!req.body.apiKey || req.body.apiKey !== CONFIG.api_key) {
+        return res.status(403).json({
+            error: 'Invalid API key',
+            code: 8
+        });
+    }
+
     // Get and parse parameters
     let link;
+    let priority = parseInt(req.body.priority) || 4;
 
-    if ('url' in req.query) {
-        link = new InspectURL(req.query.url);
+    // Validate priority
+    if (priority < 1 || priority > 5) {
+        priority = 4;
     }
-    else if ('a' in req.query && 'd' in req.query && ('s' in req.query || 'm' in req.query)) {
-        link = new InspectURL(req.query);
+
+    if ('url' in req.body) {
+        link = new InspectURL(req.body.url);
+    }
+    else if ('a' in req.body && 'd' in req.body && ('s' in req.body || 'm' in req.body)) {
+        link = new InspectURL(req.body);
     }
 
     if (!link || !link.getParams()) {
@@ -163,22 +177,24 @@ app.get('/inspect', function(req, res) {
     const job = new Job(req, res, /* bulk */ false);
 
     let price;
-
-    if (canSubmitPrice(req.query.priceKey, link, req.query.price)) {
-        price = parseInt(req.query.price);
+    if (canSubmitPrice(req.body.priceKey, link, req.body.price)) {
+        price = parseInt(req.body.price);
     }
 
     job.add(link, price);
 
     try {
-        handleJob(job);
+        // Pass priority to queue.addJob
+        queue.addJob(job, CONFIG.bot_settings.max_attempts, priority);
     } catch (e) {
         winston.warn(e);
         errors.GenericBad.respond(res);
     }
 });
 
-app.post('/bulk', (req, res) => {
+
+
+/*app.post('/bulk', (req, res) => {
     if (!req.body || (CONFIG.bulk_key && req.body.bulk_key != CONFIG.bulk_key)) {
         return errors.BadSecret.respond(res);
     }
@@ -191,7 +207,7 @@ app.post('/bulk', (req, res) => {
         return errors.MaxRequests.respond(res);
     }
 
-    const job = new Job(req, res, /* bulk */ true);
+    const job = new Job(req, res, /!* bulk *!/ true);
 
     for (const data of req.body.links) {
         const link = new InspectURL(data.link);
@@ -214,9 +230,17 @@ app.post('/bulk', (req, res) => {
         winston.warn(e);
         errors.GenericBad.respond(res);
     }
-});
+});*/
 
 app.get('/stats', (req, res) => {
+    // Validate API key
+    if (!req.body.apiKey || req.body.apiKey !== CONFIG.api_key) {
+        return res.status(403).json({
+            error: 'Invalid API key',
+            code: 8
+        });
+    }
+
     res.json({
         bots_online: botController.getReadyAmount(),
         bots_total: botController.bots.length,

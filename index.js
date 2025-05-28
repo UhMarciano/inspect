@@ -14,7 +14,7 @@ const winston = require('winston'),
     InspectURL = require('./lib/inspect_url'),
     botController = new (require('./lib/bot_controller'))(),
     CONFIG = require(args.config),
-    postgres = new (require('./lib/postgres'))(CONFIG.database_url, CONFIG.enable_bulk_inserts),
+    memoryCache = new (require('./lib/memory_cache')),
     gameData = new (require('./lib/game_data'))(CONFIG.game_files_update_interval, CONFIG.enable_game_file_updates),
     errors = require('./errors'),
     Job = require('./lib/job');
@@ -52,7 +52,6 @@ for (let [i, loginData] of CONFIG.logins.entries()) {
     botController.addBot(loginData, settings);
 }
 
-postgres.connect();
 
 // Setup and configure express
 const app = require('express')();
@@ -85,12 +84,12 @@ const allowedRegexOrigins = CONFIG.allowed_regex_origins.map((origin) => new Reg
 
 async function handleJob(job) {
     // See which items have already been cached
-    const itemData = await postgres.getItemData(job.getRemainingLinks().map(e => e.link));
+    const itemData = await memoryCache.getItemData(job.getRemainingLinks().map(e => e.link));
     for (let item of itemData) {
         const link = job.getLink(item.a);
 
         if (!item.price && link.price) {
-            postgres.updateItemPrice(item.a, link.price);
+            memoryCache.updateItemPrice(item.a, link.price);
         }
 
         gameData.addAdditionalItemProperties(item);
@@ -146,7 +145,7 @@ if (CONFIG.rate_limit && CONFIG.rate_limit.enable) {
     }))
 }
 
-app.get('/', function(req, res) {
+app.get('/inspect', function(req, res) {
     // Get and parse parameters
     let link;
 
@@ -239,10 +238,10 @@ queue.process(CONFIG.logins.length, botController, async (job) => {
     delete itemData.delay;
 
     // add the item info to the DB
-    await postgres.insertItemData(itemData.iteminfo, job.data.price);
+    await memoryCache.insertItemData(itemData.iteminfo, job.data.price);
 
     // Get rank, annotate with game files
-    itemData.iteminfo = Object.assign(itemData.iteminfo, await postgres.getItemRank(itemData.iteminfo.a));
+    itemData.iteminfo = Object.assign(itemData.iteminfo, await memoryCache.getItemRank(itemData.iteminfo.a));
     gameData.addAdditionalItemProperties(itemData.iteminfo);
 
     itemData.iteminfo = utils.removeNullValues(itemData.iteminfo);

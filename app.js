@@ -244,7 +244,7 @@ app.get('/stats', (req, res) => {
     res.json({
         bots_online: botController.getReadyAmount(),
         bots_total: botController.bots.length,
-        queue_size: queue.queue.length,
+        queue_size: queue.size(),
         queue_concurrency: queue.concurrency,
     });
 });

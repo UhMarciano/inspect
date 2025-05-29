@@ -278,7 +278,7 @@ Clone the repo (or `npm install csgofloat`) and install the Node.js dependencies
 2. Add your bot(s) login information to `config.js`
 3. Edit `config.js` with your desired settings
 4. Ensure Postgres is running if you've set it's database url
-5. Run `node index.js` in the main directory
+5. Run `node app.js` in the main directory
 6. [How to First Login a Bot](https://github.com/Step7750/CSGOFloat#how-to-first-login-a-bot)
 7. Navigate to the IP that the server is hosted on and query the API using the docs above!
 

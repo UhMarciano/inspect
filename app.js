@@ -5,25 +5,55 @@ const optionDefinitions = [
     { name: 'steam_data', alias: 's', type: String } // Steam data directory
 ];
 
-const winston = require('winston'),
-    args = require('command-line-args')(optionDefinitions),
-    bodyParser = require('body-parser'),
-    rateLimit = require('express-rate-limit'),
-    utils = require('./lib/utils'),
-    queue = new (require('./lib/queue'))(),
-    InspectURL = require('./lib/inspect_url'),
-    botController = new (require('./lib/bot_controller'))(),
-    CONFIG = require(args.config),
-    memoryCache = new (require('./lib/memory_cache')),
-    gameData = new (require('./lib/game_data'))(CONFIG.game_files_update_interval, CONFIG.enable_game_file_updates),
-    errors = require('./errors'),
-    Job = require('./lib/job');
+const args = require('command-line-args')(optionDefinitions);
+
+const winston = require('winston');
+const { combine, timestamp, printf, colorize } = winston.format;
+const bodyParser = require('body-parser');
+const rateLimit = require('express-rate-limit');
+
+// Load config first
+const CONFIG = require(args.config);
+
+// Configure default Winston logger before importing other modules
+winston.configure({
+    level: CONFIG.logLevel || 'debug',
+    format: combine(
+        colorize(),
+        timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+        printf(({ timestamp, level, message }) => `${timestamp} [${level}]: ${message}`)
+    ),
+    transports: [
+        new winston.transports.Console()
+    ]
+});
+
+// Now import other modules
+const utils = require('./lib/utils');
+const queue = new (require('./lib/queue'))();
+const InspectURL = require('./lib/inspect_url');
+const botController = new (require('./lib/bot_controller'))();
+const memoryCache = new (require('./lib/memory_cache'))();
+const gameData = new (require('./lib/game_data'))(CONFIG.game_files_update_interval, CONFIG.enable_game_file_updates);
+const errors = require('./errors');
+const Job = require('./lib/job');
+
+// Setup Winston logger with Console transport
+const logger = winston.createLogger({
+    level: CONFIG.logLevel || 'debug',
+    format: combine(
+        colorize(),
+        timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+        printf(({ timestamp, level, message }) => `${timestamp} [${level}]: ${message}`)
+    ),
+    transports: [
+        new winston.transports.Console()
+    ],
+});
 
 if (CONFIG.max_simultaneous_requests === undefined) {
     CONFIG.max_simultaneous_requests = 1;
 }
-
-winston.level = CONFIG.logLevel || 'debug';
 
 if (CONFIG.logins.length === 0) {
     console.log('There are no bot logins. Please add some in config.json');
@@ -52,7 +82,6 @@ for (let [i, loginData] of CONFIG.logins.entries()) {
     botController.addBot(loginData, settings);
 }
 
-
 // Setup and configure express
 const app = require('express')();
 app.use(function (req, res, next) {
@@ -72,7 +101,6 @@ app.use(function (error, req, res, next) {
     else next();
 });
 
-
 if (CONFIG.trust_proxy === true) {
     app.enable('trust proxy');
 }
@@ -80,7 +108,6 @@ if (CONFIG.trust_proxy === true) {
 CONFIG.allowed_regex_origins = CONFIG.allowed_regex_origins || [];
 CONFIG.allowed_origins = CONFIG.allowed_origins || [];
 const allowedRegexOrigins = CONFIG.allowed_regex_origins.map((origin) => new RegExp(origin));
-
 
 async function handleJob(job) {
     // See which items have already been cached
@@ -187,12 +214,10 @@ app.post('/inspect', function(req, res) {
         // Pass priority to queue.addJob
         queue.addJob(job, CONFIG.bot_settings.max_attempts, priority);
     } catch (e) {
-        winston.warn(e);
+        logger.warn(e.toString());
         errors.GenericBad.respond(res);
     }
 });
-
-
 
 /*app.post('/bulk', (req, res) => {
     if (!req.body || (CONFIG.bulk_key && req.body.bulk_key != CONFIG.bulk_key)) {
@@ -227,7 +252,7 @@ app.post('/inspect', function(req, res) {
     try {
         handleJob(job);
     } catch (e) {
-        winston.warn(e);
+        logger.warn(e.toString());
         errors.GenericBad.respond(res);
     }
 });*/
@@ -252,17 +277,16 @@ app.get('/stats', (req, res) => {
 
 const http_server = require('http').Server(app);
 http_server.listen(CONFIG.http.port);
-winston.info('Listening for HTTP on port: ' + CONFIG.http.port);
+logger.info('Listening for HTTP on port: ' + CONFIG.http.port);
 
 queue.process(CONFIG.logins.length, botController, async (job) => {
     const itemData = await botController.lookupFloat(job.data.link);
-    winston.debug(`Received itemData for ${job.data.link.getParams().a}`);
+    logger.debug(`Received itemData for ${job.data.link}`);
 
     // Save and remove the delay attribute
     let delay = itemData.delay;
     delete itemData.delay;
 
-    // add the item info to the DB
     await memoryCache.insertItemData(itemData.iteminfo, job.data.price);
 
     // Get rank, annotate with game files
@@ -280,7 +304,9 @@ queue.process(CONFIG.logins.length, botController, async (job) => {
 
 queue.on('job failed', (job, err) => {
     const params = job.data.link.getParams();
-    winston.warn(`Job Failed! S: ${params.s} A: ${params.a} D: ${params.d} M: ${params.m} IP: ${job.ip}, Err: ${(err || '').toString()}`);
+    logger.warn(`Job Failed! S: ${params.s} A: ${params.a} D: ${params.d} M: ${params.m} IP: ${job.ip}, Err: ${(err || '').toString()}`);
 
     job.data.job.setResponse(params.a, errors.TTLExceeded);
 });
+
+module.exports.logger = logger;

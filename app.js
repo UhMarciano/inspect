@@ -6,16 +6,28 @@ const optionDefinitions = [
 ];
 
 const args = require('command-line-args')(optionDefinitions);
+const v8 = require('v8');
+
+console.log('Starting inspect app...');
+console.log(`Heap size limit: ${(v8.getHeapStatistics().heap_size_limit / 1024 / 1024).toFixed(2)} MB`);
+console.log(`Using config file: ${args.config}`);
+if (args.steam_data) console.log(`Steam data directory override: ${args.steam_data}`);
 
 const winston = require('winston');
 const { combine, timestamp, printf, colorize } = winston.format;
 const bodyParser = require('body-parser');
 const rateLimit = require('express-rate-limit');
 
-// Load config first
-const CONFIG = require(args.config);
+let CONFIG;
+try {
+    CONFIG = require(args.config);
+    console.log('Config loaded');
+} catch (e) {
+    console.error('Failed to load config file:', e);
+    process.exit(1);
+}
 
-// Configure default Winston logger before importing other modules
+// Configure global Winston logger for other modules
 winston.configure({
     level: CONFIG.logLevel || 'debug',
     format: combine(
@@ -28,17 +40,7 @@ winston.configure({
     ]
 });
 
-// Now import other modules
-const utils = require('./lib/utils');
-const queue = new (require('./lib/queue'))();
-const InspectURL = require('./lib/inspect_url');
-const botController = new (require('./lib/bot_controller'))();
-const memoryCache = new (require('./lib/memory_cache'))();
-const gameData = new (require('./lib/game_data'))(CONFIG.game_files_update_interval, CONFIG.enable_game_file_updates);
-const errors = require('./errors');
-const Job = require('./lib/job');
-
-// Setup Winston logger with Console transport
+// Create a separate logger instance for app.js to avoid duplicate logging
 const logger = winston.createLogger({
     level: CONFIG.logLevel || 'debug',
     format: combine(
@@ -49,7 +51,25 @@ const logger = winston.createLogger({
     transports: [
         new winston.transports.Console()
     ],
+    // This prevents the logger from also sending to the global winston transports
+    exitOnError: false
 });
+
+console.log('Winston logger configured');
+
+// Now import other modules
+const utils = require('./lib/utils');
+const queue = new (require('./lib/queue'))();
+const InspectURL = require('./lib/inspect_url');
+const botController = new (require('./lib/bot_controller'))();
+const memoryCache = new (require('./lib/memory_cache'))();
+const gameData = new (require('./lib/game_data'))(CONFIG.game_files_update_interval, CONFIG.enable_game_file_updates);
+const errors = require('./errors');
+const Job = require('./lib/job');
+
+console.log('Loaded modules');
+console.log('Created logger');
+
 
 if (CONFIG.max_simultaneous_requests === undefined) {
     CONFIG.max_simultaneous_requests = 1;
@@ -64,6 +84,8 @@ if (args.steam_data) {
     CONFIG.bot_settings.steam_user.dataDirectory = args.steam_data;
 }
 
+console.log('Switching logging to winston logging, want to see more logs? Set log level in config.json (debug)');
+logger.debug(`Initializing ${CONFIG.logins.length} bots...`);
 for (let [i, loginData] of CONFIG.logins.entries()) {
     const settings = Object.assign({}, CONFIG.bot_settings);
     if (CONFIG.proxies && CONFIG.proxies.length > 0) {
@@ -74,12 +96,13 @@ for (let [i, loginData] of CONFIG.logins.entries()) {
         } else if (proxy.startsWith('socks5://')) {
             settings.steam_user = Object.assign({}, settings.steam_user, {socksProxy: proxy});
         } else {
-            console.log(`Invalid proxy '${proxy}' in config, must prefix with http:// or socks5://`);
+            logger.error(`Invalid proxy '${proxy}' in config, must prefix with http:// or socks5://`);
             process.exit(1);
         }
     }
 
     botController.addBot(loginData, settings);
+    logger.debug(`Added bot ${i + 1} with username: ${loginData.username || '[no username]'}`);
 }
 
 // Setup and configure express
@@ -219,44 +242,6 @@ app.post('/inspect', function(req, res) {
     }
 });
 
-/*app.post('/bulk', (req, res) => {
-    if (!req.body || (CONFIG.bulk_key && req.body.bulk_key != CONFIG.bulk_key)) {
-        return errors.BadSecret.respond(res);
-    }
-
-    if (!req.body.links || req.body.links.length === 0) {
-        return errors.BadBody.respond(res);
-    }
-
-    if (CONFIG.max_simultaneous_requests > 0 && req.body.links.length > CONFIG.max_simultaneous_requests) {
-        return errors.MaxRequests.respond(res);
-    }
-
-    const job = new Job(req, res, /!* bulk *!/ true);
-
-    for (const data of req.body.links) {
-        const link = new InspectURL(data.link);
-        if (!link.valid) {
-            return errors.InvalidInspect.respond(res);
-        }
-
-        let price;
-
-        if (canSubmitPrice(req.body.priceKey, link, data.price)) {
-            price = parseInt(req.query.price);
-        }
-
-        job.add(link, price);
-    }
-
-    try {
-        handleJob(job);
-    } catch (e) {
-        logger.warn(e.toString());
-        errors.GenericBad.respond(res);
-    }
-});*/
-
 app.get('/stats', (req, res) => {
     // Validate API key
     if (!req.body.apiKey || req.body.apiKey !== CONFIG.api_key) {
@@ -279,7 +264,10 @@ const http_server = require('http').Server(app);
 http_server.listen(CONFIG.http.port);
 logger.info('Listening for HTTP on port: ' + CONFIG.http.port);
 
+logger.info('Express server configured');
+
 queue.process(CONFIG.logins.length, botController, async (job) => {
+    logger.debug(`Processing job for link: ${job.data.link}`);
     const itemData = await botController.lookupFloat(job.data.link);
     logger.debug(`Received itemData for ${job.data.link}`);
 

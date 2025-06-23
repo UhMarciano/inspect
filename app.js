@@ -246,6 +246,7 @@ app.get('/stats', (req, res) => {
         bots_total: botController.bots.length,
         queue_size: queue.size(),
         queue_concurrency: queue.concurrency,
+        currently_processing_size: queue.getProcessingCount(),
     });
 });
 

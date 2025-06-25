@@ -243,6 +243,8 @@ app.post('/inspect', function(req, res) {
 });
 
 app.get('/stats', (req, res) => {
+    winston.info(`Stats requested`);
+
     // Validate API key
     if (!req.body.apiKey || req.body.apiKey !== CONFIG.api_key) {
         return res.status(403).json({
@@ -259,6 +261,24 @@ app.get('/stats', (req, res) => {
         currently_processing_size: queue.getProcessingCount(),
     });
 });
+
+app.get('/relog', (req, res) => {
+    winston.info(`bots try relog requested`);
+
+    // Validate API key
+    if (!req.body.apiKey || req.body.apiKey !== CONFIG.api_key) {
+        return res.status(403).json({
+            error: 'Invalid API key',
+            code: 8
+        });
+    }
+    botController.tryRelogBots();
+
+    res.json({
+        issued_relog: true
+    });
+});
+
 
 const http_server = require('http').Server(app);
 http_server.listen(CONFIG.http.port);

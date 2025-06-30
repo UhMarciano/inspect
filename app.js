@@ -14,7 +14,6 @@ console.log(`Using config file: ${args.config}`);
 if (args.steam_data) console.log(`Steam data directory override: ${args.steam_data}`);
 
 const winston = require('winston');
-const { combine, timestamp, printf, colorize } = winston.format;
 const bodyParser = require('body-parser');
 const rateLimit = require('express-rate-limit');
 
@@ -27,31 +26,33 @@ try {
     process.exit(1);
 }
 
-// Configure global Winston logger for other modules
+
+const { combine, timestamp, printf, colorize } = winston.format;
+
+const logFormat = combine(
+    colorize(),
+    timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+    printf(({ timestamp, level, message }) => `${timestamp} [${level}]: ${message}`)
+);
+
+// Configure default global Winston logger
 winston.configure({
     level: CONFIG.logLevel || 'debug',
-    format: combine(
-        colorize(),
-        timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-        printf(({ timestamp, level, message }) => `${timestamp} [${level}]: ${message}`)
-    ),
+    format: logFormat,
     transports: [
-        new winston.transports.Console()
+        new winston.transports.Console(),
+        new winston.transports.File({ filename: 'app.log' })
     ]
 });
 
-// Create a separate logger instance for app.js to avoid duplicate logging
+// Now create your own logger instance too (optional)
 const logger = winston.createLogger({
     level: CONFIG.logLevel || 'debug',
-    format: combine(
-        colorize(),
-        timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-        printf(({ timestamp, level, message }) => `${timestamp} [${level}]: ${message}`)
-    ),
+    format: logFormat,
     transports: [
-        new winston.transports.Console()
+        new winston.transports.Console(),
+        new winston.transports.File({ filename: 'app.log' })
     ],
-    // This prevents the logger from also sending to the global winston transports
     exitOnError: false
 });
 
@@ -106,7 +107,8 @@ for (let [i, loginData] of CONFIG.logins.entries()) {
 }
 
 // Setup and configure express
-const app = require('express')();
+const express = require('express');
+const app = express();
 app.use(function (req, res, next) {
     if (req.method === 'POST') {
         // Default content-type
@@ -196,48 +198,36 @@ if (CONFIG.rate_limit && CONFIG.rate_limit.enable) {
 }
 
 app.post('/inspect', function(req, res) {
-    // Validate API key
-    if (!req.body.apiKey || req.body.apiKey !== CONFIG.api_key) {
-        return res.status(403).json({
-            error: 'Invalid API key',
-            code: 8
-        });
-    }
-
-    // Get and parse parameters
-    let link;
-    let priority = parseInt(req.body.priority) || 4;
-
-    // Validate priority
-    if (priority < 1 || priority > 5) {
-        priority = 4;
-    }
-
-    if ('url' in req.body) {
-        link = new InspectURL(req.body.url);
-    }
-    else if ('a' in req.body && 'd' in req.body && ('s' in req.body || 'm' in req.body)) {
-        link = new InspectURL(req.body);
-    }
-
-    if (!link || !link.getParams()) {
-        return errors.InvalidInspect.respond(res);
-    }
-
-    const job = new Job(req, res, /* bulk */ false);
-
-    let price;
-    if (canSubmitPrice(req.body.priceKey, link, req.body.price)) {
-        price = parseInt(req.body.price);
-    }
-
-    job.add(link, price);
-
     try {
+        let link;
+        let priority = parseInt(req.body.priority, 10);
+        if (isNaN(priority) || priority < 1 || priority > 5) {
+            priority = 4;
+        }
+
+        if ('url' in req.body) {
+            link = new InspectURL(req.body.url);
+        } else if ('a' in req.body && 'd' in req.body && ('s' in req.body || 'm' in req.body)) {
+            link = new InspectURL(req.body);
+        }
+
+        if (!link || !link.getParams()) {
+            return errors.InvalidInspect.respond(res);
+        }
+
+        const job = new Job(req, res, false);
+
+        let price;
+        if (canSubmitPrice(req.body.priceKey, link, req.body.price)) {
+            price = parseInt(req.body.price, 10);
+        }
+
+        job.add(link, price);
+
         // Pass priority to queue.addJob
         queue.addJob(job, CONFIG.bot_settings.max_attempts, priority);
     } catch (e) {
-        logger.warn(e.toString());
+        logger.error(e.stack || e.toString());
         errors.GenericBad.respond(res);
     }
 });
@@ -315,6 +305,11 @@ queue.on('job failed', (job, err) => {
     logger.warn(`Job Failed! S: ${params.s} A: ${params.a} D: ${params.d} M: ${params.m} IP: ${job.ip}, Err: ${(err || '').toString()}`);
 
     job.data.job.setResponse(params.a, errors.TTLExceeded);
+});
+
+app.use((err, req, res, next) => {
+    logger.error('Unexpected error: ' + (err.stack || err));
+    res.status(500).json({ error: 'Internal server error', code: 500 });
 });
 
 module.exports.logger = logger;
